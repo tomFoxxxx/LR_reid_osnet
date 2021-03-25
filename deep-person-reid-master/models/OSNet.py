@@ -3,6 +3,7 @@ import warnings
 import torch
 from torch import nn
 from torch.nn import functional as F
+from IPython import embed
 
 __all__ = [
     'osnet_x1_0', 'osnet_x0_75', 'osnet_x0_5', 'osnet_x0_25', 'osnet_ibn_x1_0'
@@ -338,7 +339,10 @@ class OSNet(nn.Module):
             self.feat_dim, channels[3], dropout_p=None
         )
         # identity classification layer
-        self.classifier = nn.Linear(self.feat_dim, num_classes)
+        self.classifier = nn.Linear(self.feat_dim, num_classes, bias=False)
+        # BN Neck
+        self.bottleneck = nn.BatchNorm1d(self.feat_dim)
+        self.bottleneck.bias.requires_grad_(False)
 
         self._init_params()
 
@@ -390,6 +394,7 @@ class OSNet(nn.Module):
 
     def _init_params(self):
         for m in self.modules():
+            #embed()
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(
                     m.weight, mode='fan_out', nonlinearity='relu'
@@ -429,7 +434,9 @@ class OSNet(nn.Module):
             v = self.fc(v)
         if not self.training:
             return v
-        y = self.classifier(v)
+        feat = self.bottleneck(v)
+        y = self.classifier(feat)
+        #embed()
 
         if self.loss == {'xent'}:
             return y
@@ -609,3 +616,11 @@ def osnet_ibn_x1_0(
     if pretrained:
         init_pretrained_weights(model, key='osnet_ibn_x1_0')
     return model
+
+
+'''
+if __name__ == '__main__':
+    imgs = torch.randn(4,3,256,128)
+    model = osnet_x1_0(num_classes=751, pretrained=False, loss={'xent', 'htri'})
+    #embed()
+'''

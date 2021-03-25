@@ -57,7 +57,7 @@ parser.add_argument('--start-epoch', default=0, type=int,
 parser.add_argument('--train-batch', default=32, type=int,
                     help="train batch size")
 parser.add_argument('--test-batch', default=32, type=int, help="test batch size")
-parser.add_argument('--lr', '--learning-rate', default=0.0003, type=float,
+parser.add_argument('--lr', '--learning-rate', default=0.00035, type=float,
                     help="initial learning rate")
 parser.add_argument('--schedule', '--learning-rate-schedule', default='multistep_lr', type=str,
                     choices=show_lr_schedule(), help="initial learning rate schedule")
@@ -166,7 +166,7 @@ def main():
     print("Initializing model: {}".format(args.arch))
     model = models.init_model(name=args.arch, num_classes=dataset.num_train_pids, loss={'xent', 'htri'})
     print("Model size: {:.5f}M".format(sum(p.numel() for p in model.parameters())/1000000.0))
-
+    #embed()
     criterion_xent = CrossEntropyLabelSmooth(num_classes=dataset.num_train_pids, use_gpu=use_gpu)
     criterion_htri = TripletLoss(margin=args.margin)
 
