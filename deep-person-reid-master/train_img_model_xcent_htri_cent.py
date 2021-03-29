@@ -152,7 +152,8 @@ def main():
 
     trainloader = DataLoader(
         ImageDataset(dataset.train, transform=transform_train),
-        batch_size=args.train_batch, shuffle=True, num_workers=args.workers,
+        sampler=RandomIdentitySampler2(dataset.train, batch_size=args.train_batch, num_instances=args.num_instances),
+        batch_size=args.train_batch, num_workers=args.workers,
         pin_memory=pin_memory, drop_last=True,
     )
 
@@ -219,7 +220,7 @@ def main():
 
     for epoch in range(start_epoch, args.max_epoch):
         start_train_time = time.time()
-        train(epoch, model, criterion_xent, criterion_cent, optimizer_model, optimizer_cent, trainloader, use_gpu)
+        train(epoch, model, criterion_xent, criterion_htri, criterion_cent, optimizer_model, optimizer_cent, trainloader, use_gpu)
         train_time += round(time.time() - start_train_time)
         
         if args.schedule: scheduler.step()
@@ -249,7 +250,7 @@ def main():
     train_time = str(datetime.timedelta(seconds=train_time))
     print("Finished. Total elapsed time (h:m:s): {}. Training time (h:m:s): {}.".format(elapsed, train_time))
 
-def train(epoch, model, criterion_xent, criterion_cent, optimizer_model, optimizer_cent, trainloader, use_gpu):
+def train(epoch, model, criterion_xent, criterion_htri, criterion_cent, optimizer_model, optimizer_cent, trainloader, use_gpu):
     losses = AverageMeter()
     xent_losses = AverageMeter()
     cent_losses = AverageMeter()
