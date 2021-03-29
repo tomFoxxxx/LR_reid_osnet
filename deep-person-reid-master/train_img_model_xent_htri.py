@@ -27,7 +27,7 @@ from optimizers import init_optim
 from lr_schedule import init_lr_schedule, show_lr_schedule
 
 from IPython import embed
-import matplotlib.pyplot as plt
+
 
 parser = argparse.ArgumentParser(description='Train image model with cross entropy loss and hard triplet loss')
 # Datasets
@@ -167,9 +167,9 @@ def main():
     model = models.init_model(name=args.arch, num_classes=dataset.num_train_pids, loss={'xent', 'htri'})
     print("Model size: {:.5f}M".format(sum(p.numel() for p in model.parameters())/1000000.0))
     #embed()
+    
     criterion_xent = CrossEntropyLabelSmooth(num_classes=dataset.num_train_pids, use_gpu=use_gpu)
     criterion_htri = TripletLoss(margin=args.margin)
-
 
     optimizer = init_optim(args.optim, model.parameters(), args.lr, args.weight_decay)
     # if args.stepsize > 0:
