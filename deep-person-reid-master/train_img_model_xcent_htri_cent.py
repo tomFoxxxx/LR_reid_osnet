@@ -5,6 +5,7 @@ import sys
 import time
 import datetime
 import argparse
+import math
 import os.path as osp
 import numpy as np
 
@@ -19,9 +20,12 @@ import data_manager
 from dataset_loader import ImageDataset
 import transforms as T
 import models
-from losses import CrossEntropyLabelSmooth, CenterLoss
+from losses import CrossEntropyLabelSmooth, CenterLoss, TripletLoss, DeepSupervision
 from utils import AverageMeter, Logger, save_checkpoint
 from eval_metrics import evaluate
+from samplers import RandomIdentitySampler, RandomIdentitySampler2
+from optimizers import init_optim
+from lr_schedule import init_lr_schedule, show_lr_schedule
 
 from IPython import embed
 
@@ -37,6 +41,7 @@ parser.add_argument('--height', type=int, default=256,
 parser.add_argument('--width', type=int, default=128,
                     help="width of an image (default: 128)")
 parser.add_argument('--split-id', type=int, default=0, help="split index")
+
 # CUHK03-specific setting
 parser.add_argument('--cuhk03-labeled', action='store_true',
                     help="whether to use labeled images, if false, detected images are used (default: False)")
@@ -44,7 +49,9 @@ parser.add_argument('--cuhk03-classic-split', action='store_true',
                     help="whether to use classic split by Li et al. CVPR'14 (default: False)")
 parser.add_argument('--use-metric-cuhk03', action='store_true',
                     help="whether to use cuhk03-metric (default: False)")
+
 # Optimization options
+parser.add_argument('--optim', type=str, default='adam', help="optimization algorithm (see optimizers.py)")
 parser.add_argument('--max-epoch', default=60, type=int,
                     help="maximum epochs to run")
 parser.add_argument('--start-epoch', default=0, type=int,
@@ -57,14 +64,33 @@ parser.add_argument('--lr', '--learning-rate', default=0.0003, type=float,
 parser.add_argument('--lr-cent', default=0.5, type=float,
                     help="learning rate for center loss")
 parser.add_argument('--weight-cent', type=float, default=0.0005, help="weight for center loss")
-parser.add_argument('--stepsize', default=20, type=int,
+parser.add_argument('--schedule', '--learning-rate-schedule', default='multistep_lr', type=str,
+                    choices=show_lr_schedule(), help="initial learning rate schedule")
+parser.add_argument('--stepsize', default=60, type=int,
                     help="stepsize to decay learning rate (>0 means this is enabled)")
 parser.add_argument('--gamma', default=0.1, type=float,
                     help="learning rate decay")
+parser.add_argument('--warm-up-epoch', default=10, type=int,
+                    help="num of warm up epoch")
+parser.add_argument('--half-cos-period', default=30, type=int,
+                    help="half num of epochs wrt a full cos period, suggest set it equal to max-epoch")
+parser.add_argument('--lr-milestone', nargs='+', type=int, default=[40,70,120],
+                     help="set it when using multistep series lr_schedule")
 parser.add_argument('--weight-decay', default=5e-04, type=float,
                     help="weight decay (default: 5e-04)")
+
+#margin
+parser.add_argument('--margin', type=float, default=0.3, help="margin for triplet loss")
+#num_instance sampled per identity
+parser.add_argument('--num-instances', type=int, default=4,
+                    help="number of instances per identity")
+#whether we only use hard batch triplet loss
+parser.add_argument('--htri-only', action='store_true', default=False,
+                    help="if this is True, only htri loss is used in training")
+
 # Architecture
 parser.add_argument('-a', '--arch', type=str, default='resnet50', choices=models.get_names())
+
 # Miscs
 parser.add_argument('--print-freq', type=int, default=10, help="print frequency")
 parser.add_argument('--seed', type=int, default=1, help="manual seed")
@@ -143,18 +169,32 @@ def main():
     )
 
     print("Initializing model: {}".format(args.arch))
-    model = models.init_model(name=args.arch, num_classes=dataset.num_train_pids, loss={'cent'})
+    model = models.init_model(name=args.arch, num_classes=dataset.num_train_pids,
+                              loss={'xent', 'htri', 'cent'})
     print("Model size: {:.5f}M".format(sum(p.numel() for p in model.parameters())/1000000.0))
 
     criterion_xent = CrossEntropyLabelSmooth(num_classes=dataset.num_train_pids, use_gpu=use_gpu)
+    criterion_htri = TripletLoss(margin=args.margin)
     criterion_cent = CenterLoss(num_classes=dataset.num_train_pids, feat_dim=model.feat_dim, use_gpu=use_gpu)
 
-    optimizer_model = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer_model = init_optim(args.optim, model.parameters(), args.lr, args.weight_decay)
     optimizer_cent = torch.optim.SGD(criterion_cent.parameters(), lr=args.lr_cent)
 
-    #only the optimizer_model use learning rate schedule
-    if args.stepsize > 0:
-        scheduler = lr_scheduler.StepLR(optimizer_model, step_size=args.stepsize, gamma=args.gamma)
+    '''only the optimizer_model use learning rate schedule'''
+    # if args.stepsize > 0:
+    #     scheduler = lr_scheduler.StepLR(optimizer_model, step_size=args.stepsize, gamma=args.gamma)
+
+    '''------Modify lr_schedule here------'''
+    current_schedule = init_lr_schedule(schedule=args.schedule,
+                                        warm_up_epoch=args.warm_up_epoch,
+                                        half_cos_period=args.half_cos_period,
+                                        lr_milestone=args.lr_milestone,
+                                        gamma=args.gamma,
+                                        stepsize=args.stepsize)
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer_model, lr_lambda=current_schedule)
+    '''------Please refer to the args.xxx for details of hyperparams------'''
+    #embed()
     start_epoch = args.start_epoch
 
     if args.resume:
@@ -182,8 +222,8 @@ def main():
         train(epoch, model, criterion_xent, criterion_cent, optimizer_model, optimizer_cent, trainloader, use_gpu)
         train_time += round(time.time() - start_train_time)
         
-        if args.stepsize > 0: scheduler.step()
-        
+        if args.schedule: scheduler.step()
+
         if (epoch+1) > args.start_eval and args.eval_step > 0 and (epoch+1) % args.eval_step == 0 or (epoch+1) == args.max_epoch:
             print("==> Test")
             rank1 = test(model, queryloader, galleryloader, use_gpu)
@@ -213,6 +253,7 @@ def train(epoch, model, criterion_xent, criterion_cent, optimizer_model, optimiz
     losses = AverageMeter()
     xent_losses = AverageMeter()
     cent_losses = AverageMeter()
+    htri_losses = AverageMeter()
     batch_time = AverageMeter()
     data_time = AverageMeter()
 
@@ -227,9 +268,22 @@ def train(epoch, model, criterion_xent, criterion_cent, optimizer_model, optimiz
         data_time.update(time.time() - end)
 
         outputs, features = model(imgs)
-        xentloss = criterion_xent(outputs, pids)
-        centloss = criterion_cent(features, pids) * args.weight_cent
-        loss = xentloss + centloss
+
+        if isinstance(outputs, tuple):
+            xent_loss = DeepSupervision(criterion_xent, outputs, pids)
+        else:
+            xent_loss = criterion_xent(outputs, pids)
+
+        if isinstance(features, tuple):
+            htri_loss = DeepSupervision(criterion_htri, features, pids)
+        else:
+            htri_loss = criterion_htri(features, pids)
+        #xentloss = criterion_xent(outputs, pids)
+
+        cent_loss = criterion_cent(features, pids) * args.weight_cent
+
+        loss = xent_loss + 0.5*htri_loss + cent_loss
+
         optimizer_model.zero_grad()
         optimizer_cent.zero_grad()
         loss.backward()
@@ -244,8 +298,9 @@ def train(epoch, model, criterion_xent, criterion_cent, optimizer_model, optimiz
         end = time.time()
 
         losses.update(loss.item(), pids.size(0))
-        xent_losses.update(xentloss.item(), pids.size(0))
-        cent_losses.update(centloss.item(), pids.size(0))
+        xent_losses.update(xent_loss.item(), pids.size(0))
+        cent_losses.update(cent_loss.item(), pids.size(0))
+        htri_losses.update(htri_loss.item(), pids.size(0))
 
         if (batch_idx+1) % args.print_freq == 0:
             print('Epoch: [{0}][{1}/{2}]\t'
@@ -253,9 +308,11 @@ def train(epoch, model, criterion_xent, criterion_cent, optimizer_model, optimiz
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'TotalLoss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'ClassLoss {xcent_loss.val:.4f} ({xcent_loss.avg:.4f})\t'
+                  'MetricLoss {htri_loss.val:.4f} ({htri_loss.avg:.4f})\t'
                   'CenterLoss {cent_loss.val:.4f} ({cent_loss.avg:.4f})\t'.format(
                 epoch + 1, batch_idx + 1, len(trainloader), batch_time=batch_time,
-                data_time=data_time, loss=losses, xcent_loss=xent_losses, cent_loss=cent_losses))
+                data_time=data_time, loss=losses, xcent_loss=xent_losses, htri_loss=htri_losses,
+                cent_loss=cent_losses))
 
 def test(model, queryloader, galleryloader, use_gpu, ranks=[1, 5, 10, 20]):
     batch_time = AverageMeter()

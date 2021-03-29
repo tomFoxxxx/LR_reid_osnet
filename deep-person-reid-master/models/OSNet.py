@@ -446,6 +446,8 @@ class OSNet(nn.Module):
             return y, v
         elif self.loss == {'ring'}:
             return y, v
+        elif self.loss == {'xent', 'htri', 'cent'}:
+            return y, v
         else:
             raise KeyError("Unsupported loss: {}".format(self.loss))
         '''
