@@ -4,6 +4,7 @@ import sys
 import time
 import datetime
 import argparse
+import math
 import os.path as osp
 import numpy as np
 
@@ -22,8 +23,10 @@ from losses import CrossEntropyLabelSmooth, RingLoss
 from utils import AverageMeter, Logger, save_checkpoint
 from eval_metrics import evaluate
 from optimizers import init_optim
+from lr_schedule import init_lr_schedule, show_lr_schedule
 
 from IPython import embed
+
 
 parser = argparse.ArgumentParser(description='Train image model with ring loss')
 # Datasets
@@ -37,6 +40,7 @@ parser.add_argument('--height', type=int, default=256,
 parser.add_argument('--width', type=int, default=128,
                     help="width of an image (default: 128)")
 parser.add_argument('--split-id', type=int, default=0, help="split index")
+
 # CUHK03-specific setting
 parser.add_argument('--cuhk03-labeled', action='store_true',
                     help="whether to use labeled images, if false, detected images are used (default: False)")
@@ -44,6 +48,7 @@ parser.add_argument('--cuhk03-classic-split', action='store_true',
                     help="whether to use classic split by Li et al. CVPR'14 (default: False)")
 parser.add_argument('--use-metric-cuhk03', action='store_true',
                     help="whether to use cuhk03-metric (default: False)")
+
 # Optimization options
 parser.add_argument('--optim', type=str, default='adam', help="optimization algorithm (see optimizers.py)")
 parser.add_argument('--max-epoch', default=60, type=int,
@@ -55,15 +60,25 @@ parser.add_argument('--train-batch', default=32, type=int,
 parser.add_argument('--test-batch', default=32, type=int, help="test batch size")
 parser.add_argument('--lr', '--learning-rate', default=0.0003, type=float,
                     help="initial learning rate")
-parser.add_argument('--stepsize', default=20, type=int,
+parser.add_argument('--schedule', '--learning-rate-schedule', default='multistep_lr', type=str,
+                    choices=show_lr_schedule(), help="initial learning rate schedule")
+parser.add_argument('--stepsize', default=60, type=int,
                     help="stepsize to decay learning rate (>0 means this is enabled)")
 parser.add_argument('--gamma', default=0.1, type=float,
                     help="learning rate decay")
+parser.add_argument('--warm-up-epoch', default=10, type=int,
+                    help="num of warm up epoch")
+parser.add_argument('--half-cos-period', default=30, type=int,
+                    help="half num of epochs wrt a full cos period, suggest set it equal to max-epoch")
+parser.add_argument('--lr-milestone', nargs='+', type=int, default=[40,70,120],
+                     help="set it when using multistep series lr_schedule")
 parser.add_argument('--weight-decay', default=5e-04, type=float,
                     help="weight decay (default: 5e-04)")
 parser.add_argument('--weight-ring', type=float, default=0.01, help="weight for ring loss")
+
 # Architecture
 parser.add_argument('-a', '--arch', type=str, default='resnet50', choices=models.get_names())
+
 # Miscs
 parser.add_argument('--print-freq', type=int, default=10, help="print frequency")
 parser.add_argument('--seed', type=int, default=1, help="manual seed")
@@ -110,7 +125,8 @@ def main():
         T.RandomCrop([args.height, args.width]),
         T.ToTensor(),
         T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        torchvision.transforms.RandomErasing(p=0.5, scale=(0.02, 0.4), ratio=(0.3, 3.33), value=(0.4914, 0.4822, 0.4465))
+        torchvision.transforms.RandomErasing(p=0.5, scale=(0.02, 0.4), ratio=(0.3, 3.33),
+                                             value=(0.4914, 0.4822, 0.4465))
         #T.RandomErasing(probability=0.5, sh=0.4, mean=(0.4914, 0.4822, 0.4465)),
     ])
 
@@ -150,8 +166,20 @@ def main():
 
     params = list(model.parameters()) + list(criterion_ring.parameters())
     optimizer = init_optim(args.optim, params, args.lr, args.weight_decay)
-    if args.stepsize > 0:
-        scheduler = lr_scheduler.StepLR(optimizer, step_size=args.stepsize, gamma=args.gamma)
+    # if args.stepsize > 0:
+    #     scheduler = lr_scheduler.StepLR(optimizer, step_size=args.stepsize, gamma=args.gamma)
+
+    '''------Modify lr_schedule here------'''
+    current_schedule = init_lr_schedule(schedule=args.schedule,
+                                        warm_up_epoch=args.warm_up_epoch,
+                                        half_cos_period=args.half_cos_period,
+                                        lr_milestone=args.lr_milestone,
+                                        gamma=args.gamma,
+                                        stepsize=args.stepsize)
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=current_schedule)
+    '''------Please refer to the args.xxx for details of hyperparams------'''
+    # embed()
     start_epoch = args.start_epoch
 
     if args.resume:
@@ -179,7 +207,7 @@ def main():
         train(epoch, model, criterion_xent, criterion_ring, optimizer, trainloader, use_gpu)
         train_time += round(time.time() - start_train_time)
         
-        if args.stepsize > 0: scheduler.step()
+        if args.schedule: scheduler.step()
         
         if (epoch+1) > args.start_eval and args.eval_step > 0 and (epoch+1) % args.eval_step == 0 or (epoch+1) == args.max_epoch:
             print("==> Test")

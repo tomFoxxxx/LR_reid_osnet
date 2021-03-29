@@ -41,6 +41,7 @@ parser.add_argument('--height', type=int, default=256,
 parser.add_argument('--width', type=int, default=128,
                     help="width of an image (default: 128)")
 parser.add_argument('--split-id', type=int, default=0, help="split index")
+
 # CUHK03-specific setting
 parser.add_argument('--cuhk03-labeled', action='store_true',
                     help="whether to use labeled images, if false, detected images are used (default: False)")
@@ -48,6 +49,7 @@ parser.add_argument('--cuhk03-classic-split', action='store_true',
                     help="whether to use classic split by Li et al. CVPR'14 (default: False)")
 parser.add_argument('--use-metric-cuhk03', action='store_true',
                     help="whether to use cuhk03-metric (default: False)")
+
 # Optimization options
 parser.add_argument('--optim', type=str, default='adam', help="optimization algorithm (see optimizers.py)")
 parser.add_argument('--max-epoch', default=180, type=int,
@@ -85,6 +87,7 @@ parser.add_argument('--htri-only', action='store_true', default=False,
 
 # Architecture
 parser.add_argument('-a', '--arch', type=str, default='resnet50', choices=models.get_names())
+
 # Miscs
 parser.add_argument('--print-freq', type=int, default=10, help="print frequency")
 parser.add_argument('--seed', type=int, default=1, help="manual seed")
@@ -167,7 +170,7 @@ def main():
     model = models.init_model(name=args.arch, num_classes=dataset.num_train_pids, loss={'xent', 'htri'})
     print("Model size: {:.5f}M".format(sum(p.numel() for p in model.parameters())/1000000.0))
     #embed()
-    
+
     criterion_xent = CrossEntropyLabelSmooth(num_classes=dataset.num_train_pids, use_gpu=use_gpu)
     criterion_htri = TripletLoss(margin=args.margin)
 
