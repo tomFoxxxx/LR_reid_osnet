@@ -1,9 +1,14 @@
 from __future__ import division, absolute_import
+
 import warnings
 import torch
 from torch import nn
 from torch.nn import functional as F
 from IPython import embed
+
+import sys
+sys.path.append('..')
+from losses import ArcFace
 
 __all__ = [
     'osnet_x1_0', 'osnet_x0_75', 'osnet_x0_5', 'osnet_x0_25', 'osnet_ibn_x1_0'
@@ -343,6 +348,11 @@ class OSNet(nn.Module):
         # BN Neck
         self.bottleneck = nn.BatchNorm1d(self.feat_dim)
         self.bottleneck.bias.requires_grad_(False)
+        '''
+        # ArcFace Layer, default: metric-ArcFace loss-CrossEntropy
+        if self.loss == {'arcface'}:
+            self.arcface = ArcFace(self.feat_dim, num_classes, s=30.0, m=0.50)
+        '''
 
         self._init_params()
 
@@ -432,9 +442,23 @@ class OSNet(nn.Module):
         v = v.view(v.size(0), -1)
         if self.fc is not None:
             v = self.fc(v)
-        if not self.training:
-            return v
+        # if not self.training:
+        #     return v
         feat = self.bottleneck(v)
+        if not self.training:
+            return feat
+
+        '''
+        why return feat ?
+        for example:
+        embeddings = net(data)
+        thetas = metric(embeddings, labels)
+        loss = criterion(thetas, labels)
+        loss.backward()
+        '''
+        if self.loss == {'arcface'}:
+            return feat
+
         y = self.classifier(feat)
         #embed()
 
