@@ -249,7 +249,7 @@ def train(epoch, model, criterion_xent, arcface, optimizer, trainloader, use_gpu
     for batch_idx, (imgs, pids, _) in enumerate(trainloader):
         if use_gpu:
             imgs, pids = imgs.cuda(), pids.cuda()
-
+        #embed()
         # measure data loading time
         data_time.update(time.time() - end)
         

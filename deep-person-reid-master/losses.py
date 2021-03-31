@@ -205,6 +205,8 @@ class ArcFace(nn.Module):
                     (1.0 - one_hot) * cosine)  # you can use torch.where if your torch.__version__ is 0.4
         output *= self.s
         # print(output)
+        # from IPython import embed
+        # embed()
 
         return output
 
