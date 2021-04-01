@@ -22,7 +22,7 @@ import transforms as T
 import models
 from losses import CrossEntropyLabelSmooth, TripletLoss, DeepSupervision
 from utils import AverageMeter, Logger, save_checkpoint
-from eval_metrics import evaluate
+from eval_metrics import evaluate, euclidean_distance, cosine_similarity
 from samplers import RandomIdentitySampler, RandomIdentitySampler2
 from optimizers import init_optim
 from lr_schedule import init_lr_schedule, show_lr_schedule
@@ -100,6 +100,8 @@ parser.add_argument('--start-eval', type=int, default=0, help="start to evaluate
 parser.add_argument('--save-dir', type=str, default='log')
 parser.add_argument('--use-cpu', action='store_true', help="use cpu")
 parser.add_argument('--gpu-devices', default='0', type=str, help='gpu device ids for CUDA_VISIBLE_DEVICES')
+parser.add_argument('--distance', type=str, default='euclidean', help="euclidean or cosine")
+parser.add_argument('--feat-norm', action='store_true', help="normalize features --> calculate dist mat")
 
 args = parser.parse_args()
 
@@ -359,11 +361,25 @@ def test(model, queryloader, galleryloader, use_gpu, ranks=[1, 5, 10, 20]):
     
     print("==> BatchTime(s)/BatchSize(img): {:.3f}/{}".format(batch_time.avg, args.test_batch))
 
-    m, n = qf.size(0), gf.size(0)
-    distmat = torch.pow(qf, 2).sum(dim=1, keepdim=True).expand(m, n) + \
-              torch.pow(gf, 2).sum(dim=1, keepdim=True).expand(n, m).t()
-    distmat.addmm_(1, -2, qf, gf.t())
-    distmat = distmat.numpy()
+    '''
+        #euclidean_distance
+        m, n = qf.size(0), gf.size(0)
+        distmat = torch.pow(qf, 2).sum(dim=1, keepdim=True).expand(m, n) + \
+                  torch.pow(gf, 2).sum(dim=1, keepdim=True).expand(n, m).t()
+        distmat.addmm_(1, -2, qf, gf.t())
+        distmat = distmat.numpy()
+        '''
+    if args.feat_norm:
+        print("The test feature is normalized")
+        qf = torch.nn.functional.normalize(qf, dim=1, p=2)  # along channel
+        gf = torch.nn.functional.normalize(gf, dim=1, p=2)  # along channel
+
+    if args.distance == 'euclidean':
+        print('=> Computing DistMat with euclidean distance')
+        distmat = euclidean_distance(qf, gf)
+    elif args.distance == 'cosine':
+        print('=> Computing DistMat with cosine similarity')
+        distmat = cosine_similarity(qf, gf)
 
     print("Computing CMC and mAP")
     cmc, mAP = evaluate(distmat, q_pids, g_pids, q_camids, g_camids, use_metric_cuhk03=args.use_metric_cuhk03)
